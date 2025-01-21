@@ -1,8 +1,9 @@
-
 name: TOOLBOXLAP
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'  # إعادة التشغيل التلقائي كل 6 ساعات
 
 jobs:
   setup-rdp-tunnel:
@@ -10,28 +11,48 @@ jobs:
 
     steps:
     - name: Check out the repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
 
-    - name: Download and Install Playit
+    # تحسين التخزين المؤقت لتجنب إعادة التنزيل
+    - name: Cache Playit Agent
+      id: cache-playit
+      uses: actions/cache@v3
+      with:
+        path: C:\Program Files\Playit\playit.exe
+        key: playit-v0.15.26
+
+    - name: Download and Install Playit if not cached
+      if: steps.cache-playit.outputs.cache-hit != 'true'
       run: |
-        Invoke-WebRequest -Uri "https://github.com/playit-cloud/playit-agent/releases/download/v0.15.26/playit-windows-x86_64-signed.exe" -OutFile "$env:USERPROFILE\playit.exe"
-        Start-Sleep -Seconds 5  # Give some time for the download to complete
-        
-    # Default, optional.
-    - name: Enable TS
-      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server'-name "fDenyTSConnections" -Value 0
-    - run: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-    - run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
-    - run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "admin@123" -Force)
+        Write-Host "Playit not found in cache, installing..."
+        Invoke-WebRequest -Uri "https://github.com/playit-cloud/playit-agent/releases/download/v0.15.26/playit-windows-x86_64-signed.exe" -OutFile "C:\Program Files\Playit\playit.exe"
+        Start-Sleep -Seconds 5  # انتظار اكتمال التثبيت
+    
+    # إعداد RDP وضبط الجدار الناري والتحقق من الخدمة
+    - name: Enable Remote Desktop and Firewall Rules
+      run: |
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+        netstat -an | findstr "3389"  # التحقق من تشغيل الخدمة
 
-    - name: www.toolboxlap.com
+    - name: Set RDP User Credentials
+      run: |
+        $password = ConvertTo-SecureString -AsPlainText "admin@123" -Force
+        Set-LocalUser -Name "runneradmin" -Password $password
+
+    - name: Run Playit Agent with Secret Key
       env:
         PLAYIT_AUTH_KEY: ${{ secrets.PL }} 
       run: |
-        Start-Process -FilePath "$env:USERPROFILE\playit.exe" -ArgumentList "--secret $env:PLAYIT_AUTH_KEY" -NoNewWindow -Wait
-        Start-Process -FilePath "$env:USERPROFILE\playit.exe" -NoNewWindow
-    #  www.toolboxlap.com
-    # Prevent workflow to stop
-    - name: Keep the GitHub Action Runner Alive
+        Start-Process -FilePath "C:\Program Files\Playit\playit.exe" -ArgumentList "--secret $env:PLAYIT_AUTH_KEY" -NoNewWindow -Wait
+        Write-Host "Playit Agent is running."
+
+    # إبقاء الجلسة نشطة لأطول فترة ممكنة وتجنب إنهاء العملية
+    - name: Keep GitHub Action Runner Alive
       run: |
-          Start-Sleep -Seconds 21600  # Adjust the duration based on your needs
+        while ($true) {
+          Write-Host "Keeping session alive..."
+          Start-Sleep -Seconds 300
+        }
+
